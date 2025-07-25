@@ -31,7 +31,7 @@ class Detect(nn.Module):
     strides = torch.empty(0)  # init
     legacy = False  # backward compatibility for v3/v5/v8/v9 models
 
-    def __init__(self, nc=80, ch=()):
+    def __init__(self, nc=80, slim_obj_assign=False, ch=()):
         """Initializes the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
         self.nc = nc  # number of classes
@@ -55,7 +55,7 @@ class Detect(nn.Module):
                 for x in ch
             )
         )
-        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+        self.dfl = DFL(self.reg_max, slim_obj_assign=slim_obj_assign) if self.reg_max > 1 else nn.Identity()
 
         if self.end2end:
             self.one2one_cv2 = copy.deepcopy(self.cv2)
@@ -175,9 +175,9 @@ class Detect(nn.Module):
 class Segment(Detect):
     """YOLO Segment head for segmentation models."""
 
-    def __init__(self, nc=80, nm=32, npr=256, combine_mask=False, ch=()):
+    def __init__(self, nc=80, nm=32, npr=256, combine_mask=False, slim_obj_assign=False, ch=()):
         """Initialize the YOLO model attributes such as the number of masks, prototypes, and the convolution layers."""
-        super().__init__(nc, ch)
+        super().__init__(nc, slim_obj_assign, ch)
         self.npr = npr  # number of protos
         self.combine_mask = combine_mask
         self.nc = nc

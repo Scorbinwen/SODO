@@ -4,7 +4,7 @@ import contextlib
 import math
 import re
 import time
-
+import argparse
 import cv2
 import numpy as np
 import torch
@@ -12,7 +12,10 @@ import torch.nn.functional as F
 import pycocotools.mask as maskUtils
 from ultralytics.utils import LOGGER
 from ultralytics.utils.metrics import batch_probiou
-
+import os
+import cv2
+import math
+import yaml
 
 class Profile(contextlib.ContextDecorator):
     """
@@ -893,3 +896,143 @@ def empty_like(x):
     return (
         torch.empty_like(x, dtype=torch.float32) if isinstance(x, torch.Tensor) else np.empty_like(x, dtype=np.float32)
     )
+
+def auto_type(value):
+    """
+    尝试将输入值转换为不同的常见类型。
+    依次尝试转换为布尔型、整数型、浮点型，若都失败则保持为字符串类型。
+
+    Args:
+        value (str): 输入的字符串值。
+
+    Returns:
+        bool/int/float/str: 转换后的类型。
+    """
+    # 尝试转换为布尔型
+    if value.lower() in ['true', 'false']:
+        return value.lower() == 'true'
+    # 尝试转换为整数型
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    # 尝试转换为浮点型
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    # 若都失败则保持为字符串类型
+    return value
+def parse_opt():
+    # 基础解析器只处理model和cfg
+    base_parser = argparse.ArgumentParser()
+    base_parser.add_argument('--model', default="../ultralytics/cfg/models/11/yolo11l-seg.yaml", help='模型配置文件路径')
+    base_parser.add_argument('--cfg', default="../ultralytics/cfg/hyps/hyps.scratch-low.yaml", help='超参数配置文件路径')
+    base_parser.add_argument('--imgsz', nargs='+', type=int, default=[320, 320],
+                        help='输入图像尺寸列表，例如: --imgsz 704 1024')
+    base_args, unknown = base_parser.parse_known_args()
+
+    # 加载YAML配置
+    with open(base_args.cfg) as f:
+        hyp = yaml.safe_load(f)
+
+    # 校验未知参数合法性
+    valid_params = hyp.keys()
+    for arg in unknown:
+        if arg.startswith('--'):
+            param_name = arg[2:]
+            if param_name not in valid_params:
+                raise ValueError(f"非法参数: '{param_name}' 不在配置文件中")
+
+    # 创建包含所有合法参数的完整解析器
+    existing_flags = [a.option_strings for a in base_parser._actions]
+    # 动态添加YAML中的参数
+    for param, value in hyp.items():
+        param_type = type(value)
+        if [f'--{param}'] not in existing_flags:
+            base_parser.add_argument(f'--{param}',
+                                type=auto_type,
+                                default=value,
+                                help=f'(默认来自YAML) {param_type.__name__} 类型参数')
+
+    return base_parser.parse_args()
+
+def save_score_heatmap(scores, ind, pred_bbox=None, target_bbox=None, batch=None, suffix="", need_sigmoid=False, show_bbox=False, save_dir="../runs/pred_scores"):
+    """Save pred scores."""
+    assert batch is not None, "batch should not be None"
+    smallest_res = scores.shape[1] // (4 * 4 + 2 * 2 + 1 * 1)
+    s1, s2, s3 = 16 * smallest_res, 4 * smallest_res, 1 * smallest_res
+
+    im_file = batch["im_file"][ind]
+    letterbox_img = batch["img"][ind]
+    _scores = scores[ind]
+
+    if need_sigmoid:
+        _scores = _scores.sigmoid()
+    # 取最大的类别即可
+    _scores = _scores.max(dim=-1)[0]
+    scores_40 = _scores[:s1].view(int(math.sqrt(s1)), int(math.sqrt(s1)))
+    scores_20 = _scores[s1:s1 + s2].view(int(math.sqrt(s2)), int(math.sqrt(s2)))
+    scores_10 = _scores[s1 + s2:s1 + s2 + s3].view(int(math.sqrt(s3)), int(math.sqrt(s3)))
+
+    if pred_bbox is not None:
+        _bboxes = pred_bbox[ind]
+        bboxes_40 = _bboxes[:s1].view(int(math.sqrt(s1)), int(math.sqrt(s1)), 4)
+        bboxes_20 = _bboxes[s1:s1 + s2].view(int(math.sqrt(s2)), int(math.sqrt(s2)), 4)
+        bboxes_10 = _bboxes[s1 + s2:s1 + s2 + s3].view(int(math.sqrt(s3)), int(math.sqrt(s3)), 4)
+        bboxes_list = [bboxes_10, bboxes_20, bboxes_40]
+    if im_file is not None:
+        im = letterbox_img.detach().cpu().numpy()[:3][::-1].transpose(1, 2, 0)
+        im = (im * 255).astype(np.uint8)
+
+        # 循环处理三个张量
+        for i, score_map_ts in enumerate([scores_10, scores_20, scores_40]):
+            # 将张量转换为 numpy 数组
+            score_map = score_map_ts.detach().cpu().numpy()
+            # 检查 score_map 是否为空
+
+            score_map = score_map.astype(np.float32)
+            heatmap = cv2.resize(score_map, (im.shape[1], im.shape[0]))
+            # 归一化到 0-255 范围
+
+            heatmap = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            # 应用热图颜色映射
+            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+            # 将最大值转换为字符串
+            max_value_str = f"Max: {score_map.max():.4f}"
+            # 定义文本位置，这里放在 heatmap 最上方
+            text_position = (10, 30)
+            # 定义文本颜色，绿色
+            text_color = (0, 255, 0)
+            # 定义字体和字体大小
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1
+            # 定义字体厚度
+            font_thickness = 2
+
+            # 在 heatmap 上绘制文本
+            cv2.putText(heatmap, max_value_str, text_position, font, font_scale, text_color, font_thickness)
+
+            im = np.ascontiguousarray(im)
+
+            if show_bbox and pred_bbox is not None:  # 检查 bboxes 是否非空
+                index = (score_map_ts==torch.max(score_map_ts)).nonzero()
+                index_i = index[:, 0]
+                index_j = index[:, 1]
+                for x1, y1, x2, y2 in bboxes_list[i][index_i, index_j, :].detach().cpu():
+                    x1, y1, x2, y2 = int(x1.item()), int(y1.item()), int(x2.item()), int(y2.item())
+                    cv2.rectangle(heatmap, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            if show_bbox and target_bbox is not None:
+                for x1, y1, x2, y2 in target_bbox[ind].detach().cpu():
+                    x1, y1, x2, y2 = int(x1.item()), int(y1.item()), int(x2.item()), int(y2.item())
+                    cv2.rectangle(heatmap, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+            os.makedirs(save_dir, exist_ok=True)
+            file_name = os.path.basename(im_file)
+            save_img_path = os.path.join(save_dir, file_name)
+            name, extension = os.path.splitext(file_name)
+            hm_file_name = f"{name}_hm_{suffix}_{(2**i)*10}_{extension}"
+            save_hm_path = os.path.join(save_dir, hm_file_name)
+            cv2.imwrite(save_img_path, im)
+            cv2.imwrite(save_hm_path, heatmap)

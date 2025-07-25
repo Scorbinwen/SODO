@@ -7,6 +7,7 @@ from . import LOGGER
 from .checks import check_version
 from .metrics import bbox_iou, probiou
 from .ops import xywhr2xyxyxyxy
+import math
 
 TORCH_1_10 = check_version(torch.__version__, "1.10.0")
 
@@ -26,7 +27,7 @@ class TaskAlignedAssigner(nn.Module):
         eps (float): A small value to prevent division by zero.
     """
 
-    def __init__(self, topk=13, num_classes=80, alpha=1.0, beta=6.0, eps=1e-9):
+    def __init__(self, topk=13, num_classes=80, slim_obj_assign=False, alpha=1.0, beta=6.0, eps=1e-9):
         """Initialize a TaskAlignedAssigner object with customizable hyperparameters."""
         super().__init__()
         self.topk = topk
@@ -35,6 +36,7 @@ class TaskAlignedAssigner(nn.Module):
         self.alpha = alpha
         self.beta = beta
         self.eps = eps
+        self.slim_obj_assign = slim_obj_assign
 
     @torch.no_grad()
     def forward(self, pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt):
@@ -112,14 +114,14 @@ class TaskAlignedAssigner(nn.Module):
         align_metric *= mask_pos
         pos_align_metrics = align_metric.amax(dim=-1, keepdim=True)  # b, max_num_obj
         pos_overlaps = (overlaps * mask_pos).amax(dim=-1, keepdim=True)  # b, max_num_obj
-        norm_align_metric = (align_metric * pos_overlaps / (pos_align_metrics + self.eps)).amax(-2).unsqueeze(-1)
+        norm_align_metric = (align_metric / (pos_align_metrics + self.eps)).amax(-2).unsqueeze(-1)
         target_scores = target_scores * norm_align_metric
 
         return target_labels, target_bboxes, target_scores, fg_mask.bool(), target_gt_idx
 
     def get_pos_mask(self, pd_scores, pd_bboxes, gt_labels, gt_bboxes, anc_points, mask_gt):
         """Get in_gts mask, (b, max_num_obj, h*w)."""
-        mask_in_gts = self.select_candidates_in_gts(anc_points, gt_bboxes)
+        mask_in_gts = self.select_candidates_in_gts(anc_points, gt_bboxes, slim_obj_assign=self.slim_obj_assign)
         # Get anchor_align metric, (b, max_num_obj, h*w)
         align_metric, overlaps = self.get_box_metrics(pd_scores, pd_bboxes, gt_labels, gt_bboxes, mask_in_gts * mask_gt)
         # Get topk_metric mask, (b, max_num_obj, h*w)
@@ -148,6 +150,8 @@ class TaskAlignedAssigner(nn.Module):
         overlaps[mask_gt] = self.iou_calculation(gt_boxes, pd_boxes)
 
         align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(self.beta)
+
+        print(f"align_metric.max():{align_metric.max()} bbox_scores.max():{bbox_scores.max()} overlaps.max():{overlaps.max()}")
         return align_metric, overlaps
 
     def iou_calculation(self, gt_bboxes, pd_bboxes):
@@ -238,7 +242,7 @@ class TaskAlignedAssigner(nn.Module):
         return target_labels, target_bboxes, target_scores
 
     @staticmethod
-    def select_candidates_in_gts(xy_centers, gt_bboxes, eps=1e-9):
+    def select_candidates_in_gts(xy_centers, gt_bboxes, slim_obj_assign=False, eps=1e-9):
         """
         Select positive anchor centers within ground truth bounding boxes.
 
@@ -256,8 +260,32 @@ class TaskAlignedAssigner(nn.Module):
         """
         n_anchors = xy_centers.shape[0]
         bs, n_boxes, _ = gt_bboxes.shape
-        lt, rb = gt_bboxes.view(-1, 1, 4).chunk(2, 2)  # left-top, right-bottom
-        bbox_deltas = torch.cat((xy_centers[None] - lt, rb - xy_centers[None]), dim=2).view(bs, n_boxes, n_anchors, -1)
+        # lt, rb = gt_bboxes.view(-1, 1, 4).chunk(2, 2)  # left-top, right-bottom
+        if slim_obj_assign:
+            x1, y1, x2, y2 = gt_bboxes.view(-1, 1, 4).chunk(4, dim=2)
+            sqrt_n_anchors = int(math.sqrt(n_anchors))
+            if sqrt_n_anchors * sqrt_n_anchors == n_anchors:  # for layer-wise
+                grid_cell_offset = xy_centers.min()
+                x1_grid, y1_grid = (xy_centers - grid_cell_offset).view(1, -1, 2).chunk(2, dim=2)
+                x2_grid, y2_grid = (xy_centers + grid_cell_offset).view(1, -1, 2).chunk(2, dim=2)
+            else:
+                smallest_res = n_anchors // (4 * 4 + 2 * 2 + 1 * 1)
+                s1, s2, s3 = 16 * smallest_res, 4 * smallest_res, 1 * smallest_res
+                grid_cell_offset = torch.ones((xy_centers.shape[0], 1), device=xy_centers.device)
+
+                grid_cell_offset[:s1] *= 4
+                grid_cell_offset[s1:s1+s2] *= 8
+                grid_cell_offset[s1+s2:] *= 16
+
+                x1_grid, y1_grid = (xy_centers - grid_cell_offset).view(1, -1, 2).chunk(2, dim=2)
+                x2_grid, y2_grid = (xy_centers + grid_cell_offset).view(1, -1, 2).chunk(2, dim=2)
+
+            bbox_deltas = torch.cat((x2_grid - x1, y2_grid - y1, x2 - x1_grid, y2 - y1_grid), dim=2).view(bs, n_boxes,
+                                                                                                          n_anchors, -1)
+        else:
+            lt, rb = gt_bboxes.view(-1, 1, 4).chunk(2, 2)  # left-top, right-bottom
+            bbox_deltas = torch.cat((xy_centers[None] - lt, rb - xy_centers[None]), dim=2).view(bs, n_boxes, n_anchors, -1)
+
         # return (bbox_deltas.min(3)[0] > eps).to(gt_bboxes.dtype)
         return bbox_deltas.amin(3).gt_(eps)
 
@@ -357,10 +385,15 @@ def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
     return torch.cat((x1y1, x2y2), dim)  # xyxy bbox
 
 
-def bbox2dist(anchor_points, bbox, reg_max):
+def bbox2dist(anchor_points, bbox, reg_max, slim_obj_assign=False):
     """Transform bbox(xyxy) to dist(ltrb)."""
     x1y1, x2y2 = bbox.chunk(2, -1)
-    return torch.cat((anchor_points - x1y1, x2y2 - anchor_points), -1).clamp_(0, reg_max - 0.01)  # dist (lt, rb)
+    dist = torch.cat((anchor_points - x1y1, x2y2 - anchor_points), -1)
+    if slim_obj_assign:
+        dist = dist.clamp_(-1, reg_max - 2 - 0.01)
+    else:
+        dist = dist.clamp_(0, reg_max - 1 - 0.01)
+    return dist  # dist (lt, rb)
 
 
 def dist2rbox(pred_dist, pred_angle, anchor_points, dim=-1):

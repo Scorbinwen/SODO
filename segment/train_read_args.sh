@@ -1,1 +1,0 @@
-python train.py --model ../weights/yolo11l-seg.pt --device "0,1" --save_period 10 --epochs 600 --batch 32

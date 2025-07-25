@@ -163,7 +163,7 @@ class BasePredictor:
             auto=same_shapes and (self.model.pt or (getattr(self.model, "dynamic", False) and not self.model.imx)),
             stride=self.model.stride,
         )
-        return [letterbox(labels={"img": img}, mode="predict") for img in imgs]
+        return [letterbox(labels={"img": img}) for img in imgs]
 
     def postprocess(self, preds, img, orig_imgs):
         """Post-processes predictions for an image and returns them."""

@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ultralytics.utils.metrics import OKS_SIGMA
+from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh, save_score_heatmap
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
@@ -64,10 +65,11 @@ class FocalLoss(nn.Module):
 class DFLoss(nn.Module):
     """Criterion class for computing DFL losses during training."""
 
-    def __init__(self, reg_max=16) -> None:
+    def __init__(self, reg_max=16, slim_obj_assign=False) -> None:
         """Initialize the DFL module."""
         super().__init__()
         self.reg_max = reg_max
+        self.slim_obj_assign = slim_obj_assign
 
     def __call__(self, pred_dist, target):
         """
@@ -76,7 +78,13 @@ class DFLoss(nn.Module):
         Distribution Focal Loss (DFL) proposed in Generalized Focal Loss
         https://ieeexplore.ieee.org/document/9792391
         """
-        target = target.clamp_(0, self.reg_max - 1 - 0.01)
+        if self.slim_obj_assign:
+            target = target.clamp_(-1, self.reg_max - 2 - 0.01)
+            target = target + 1
+            pred_dist = pred_dist + 1
+        else:
+            target = target.clamp_(0, self.reg_max - 1 - 0.01)
+
         tl = target.long()  # target left
         tr = tl + 1  # target right
         wl = tr - target  # weight left
@@ -90,10 +98,11 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses during training."""
 
-    def __init__(self, reg_max=16):
+    def __init__(self, reg_max=16, slim_obj_assign=False):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
-        self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+        self.dfl_loss = DFLoss(reg_max, slim_obj_assign=slim_obj_assign) if reg_max > 1 else None
+        self.slim_obj_assign = slim_obj_assign
 
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """IoU loss."""
@@ -103,7 +112,7 @@ class BboxLoss(nn.Module):
 
         # DFL loss
         if self.dfl_loss:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
+            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max, slim_obj_assign=self.slim_obj_assign)
             loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
@@ -160,7 +169,7 @@ class v8DetectionLoss:
         """Initializes v8DetectionLoss with the model, defining model-related properties and BCE loss function."""
         device = next(model.parameters()).device  # get model device
         h = model.args  # hyperparameters
-
+        self.model = model
         m = model.model[-1]  # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
         self.hyp = h
@@ -172,9 +181,13 @@ class v8DetectionLoss:
 
         self.use_dfl = m.reg_max > 1
 
-        self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
-        self.bbox_loss = BboxLoss(m.reg_max).to(device)
-        self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
+        self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0,
+                                            slim_obj_assign=self.hyp.slim_obj_assign)
+        self.bbox_loss = BboxLoss(m.reg_max, slim_obj_assign=self.hyp.slim_obj_assign).to(device)
+        if self.hyp.slim_obj_assign:
+            self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device) - 1
+        else:
+            self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets, batch_size, scale_tensor):
         """Preprocesses the target counts and matches with the input batch size to output a tensor."""
@@ -205,7 +218,13 @@ class v8DetectionLoss:
     def __call__(self, preds, batch):
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
         loss = torch.zeros(3, device=self.device)  # box, cls, dfl
-        feats = preds[1] if isinstance(preds, tuple) else preds
+        if isinstance(preds, tuple):
+            training = False
+            feats = preds[1]
+        else: # training phase
+            training = True
+            feats = preds
+
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
             (self.reg_max * 4, self.nc), 1
         )
@@ -221,6 +240,7 @@ class v8DetectionLoss:
 
         # Targets
         targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+
         targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
         # targets shape:[batch_size, counts.max(), ne - 1]
         gt_labels, gt_bboxes = targets.split((1, 4), 2)  # cls, xyxy
@@ -232,21 +252,59 @@ class v8DetectionLoss:
         # dfl_conf = pred_distri.view(batch_size, -1, 4, self.reg_max).detach().softmax(-1)
         # dfl_conf = (dfl_conf.amax(-1).mean(-1) + dfl_conf.amax(-1).amin(-1)) / 2
 
-        _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
-            # pred_scores.detach().sigmoid() * 0.8 + dfl_conf.unsqueeze(-1) * 0.2,
-            pred_scores.detach().sigmoid(),
-            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor,
-            gt_labels,
-            gt_bboxes,
-            mask_gt,
-        )
+        # apply layer-wise assigner:
+        layer_wise_assign = self.model.args.layer_wise_assign and self.model.args.slim_obj_assign
+        if layer_wise_assign:
+            smallest_res = pred_scores.shape[1] // (4*4 + 2*2 + 1*1)
+            s1, s2, s3 = 16*smallest_res, 4*smallest_res, 1*smallest_res
+            pred_scores_list = [pred_scores[:, :s1, :], pred_scores[:, s1: s1 + s2, :], pred_scores[:, s1 + s2:, :]]
+            pred_bboxes_list = [pred_bboxes[:, :s1, :], pred_bboxes[:, s1:s1 + s2, :], pred_bboxes[:, s1 + s2:, :]]
+            anchor_points_list = [anchor_points[:s1, :], anchor_points[s1:s1 + s2, :], anchor_points[s1 + s2:, :]]
+            stride_tensor_list = [stride_tensor[:s1, :], stride_tensor[s1:s1 + s2, :], stride_tensor[s1 + s2:, :]]
+            target_labels, target_bboxes, target_scores, fg_mask = [], [], [], []
+
+            for i in range(3):
+                target_labels_, target_bboxes_, target_scores_, fg_mask_, _ = self.assigner(
+                    pred_scores_list[i].detach().sigmoid(),
+                    (pred_bboxes_list[i].detach() * stride_tensor_list[i]).type(gt_bboxes.dtype),
+                    anchor_points_list[i] * stride_tensor_list[i],
+                    gt_labels,
+                    gt_bboxes,
+                    mask_gt,
+                )
+                target_labels.append(target_labels_)
+                target_bboxes.append(target_bboxes_)
+                target_scores.append(target_scores_)
+                fg_mask.append(fg_mask_)
+            target_bboxes = torch.cat(target_bboxes, 1)
+            target_scores = torch.cat(target_scores, 1)
+            target_labels = torch.cat(target_labels, 1)
+            fg_mask = torch.cat(fg_mask, 1)
+        else:
+            target_labels, target_bboxes, target_scores, fg_mask, _ = self.assigner(
+                pred_scores.detach().sigmoid(),
+                (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+                anchor_points * stride_tensor,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+            )
 
         target_scores_sum = max(target_scores.sum(), 1)
 
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
         loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+
+        debug_score = True
+        if debug_score:
+            if not training:
+                import numpy as np
+                for ind in range(8):
+                    save_score_heatmap(target_scores, ind=ind, target_bbox=gt_bboxes, batch=batch,
+                                                    suffix="target", need_sigmoid=False, show_bbox=True)
+                    save_score_heatmap(pred_scores, ind=ind, pred_bbox=(pred_bboxes * stride_tensor).type(gt_bboxes.dtype),
+                                            batch=batch, suffix="pred", need_sigmoid=True, show_bbox=True)
 
         # Bbox loss
         if fg_mask.sum():

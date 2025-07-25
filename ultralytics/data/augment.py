@@ -1260,7 +1260,7 @@ class RandomPerspective:
         return labels
 
     @staticmethod
-    def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):
+    def box_candidates(box1, box2, wh_thr=2, ar_thr=260, area_thr=0.1, eps=1e-16):
         """
         Compute candidate boxes for further processing based on size and aspect ratio criteria.
 
@@ -1453,7 +1453,6 @@ class RandomFlip:
         """
         img = labels["img"]
         instances = labels.pop("instances")
-
         instances.convert_bbox(format="xywh")
         h, w = img.shape[:2]
         h = 1 if instances.normalized else h
@@ -1470,6 +1469,7 @@ class RandomFlip:
                 instances.keypoints = np.ascontiguousarray(instances.keypoints[:, self.flip_idx, :])
         labels["img"] = np.ascontiguousarray(img)
         labels["instances"] = instances
+
         return labels
 
 
@@ -1531,7 +1531,7 @@ class LetterBox:
         self.stride = stride
         self.center = center  # Put the image in the middle or top-left
 
-    def __call__(self, labels=None, image=None, mode="train"):
+    def __call__(self, labels=None, image=None):
         """
         Resizes and pads an image for object detection, instance segmentation, or pose estimation tasks.
 
@@ -1592,8 +1592,7 @@ class LetterBox:
             labels["ratio_pad"] = (labels["ratio_pad"], (left, top))  # for evaluation
 
         if len(labels):
-            if mode == "train":
-                labels = self._update_labels(labels, ratio, left, top)
+            labels = self._update_labels(labels, ratio, left, top)
             labels["img"] = img
             labels["resized_shape"] = new_shape
             return labels
@@ -1624,6 +1623,8 @@ class LetterBox:
             >>> padw, padh = 10, 20
             >>> updated_labels = letterbox._update_labels(labels, ratio, padw, padh)
         """
+        if "instances" not in labels:
+            return labels
         labels["instances"].convert_bbox(format="xyxy")
         labels["instances"].denormalize(*labels["img"].shape[:2][::-1])
         labels["instances"].scale(*ratio)
