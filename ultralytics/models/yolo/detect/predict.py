@@ -20,7 +20,8 @@ class DetectionPredictor(BasePredictor):
         ```
     """
 
-    def postprocess(self, preds, img, orig_imgs, protos, **kwargs):
+    def postprocess(self, preds, img, orig_imgs, protos=None
+                    , **kwargs):
         """Post-processes predictions and returns a list of Results objects."""
         preds = ops.non_max_suppression(
             preds,

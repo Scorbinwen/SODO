@@ -81,7 +81,7 @@ class DFLoss(nn.Module):
         if self.slim_obj_assign:
             target = target.clamp_(-1, self.reg_max - 2 - 0.01)
             target = target + 1
-            pred_dist = pred_dist + 1
+            # pred_dist = pred_dist + 1
         else:
             target = target.clamp_(0, self.reg_max - 1 - 0.01)
 
@@ -108,6 +108,7 @@ class BboxLoss(nn.Module):
         """IoU loss."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # DFL loss
@@ -118,6 +119,10 @@ class BboxLoss(nn.Module):
         else:
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
 
+        if loss_dfl.isnan().any():
+            print(f"self.slim_obj_assign:{self.slim_obj_assign}")
+            # print(f"pred_dist[fg_mask]:{pred_dist[fg_mask]} target_ltrb[fg_mask]:{target_ltrb[fg_mask]} loss_dfl:{loss_dfl}")
+            raise ValueError("loss_dfl is nan")
         return loss_iou, loss_dfl
 
 

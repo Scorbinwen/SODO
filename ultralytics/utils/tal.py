@@ -151,7 +151,6 @@ class TaskAlignedAssigner(nn.Module):
 
         align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(self.beta)
 
-        print(f"align_metric.max():{align_metric.max()} bbox_scores.max():{bbox_scores.max()} overlaps.max():{overlaps.max()}")
         return align_metric, overlaps
 
     def iou_calculation(self, gt_bboxes, pd_bboxes):

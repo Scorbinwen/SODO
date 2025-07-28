@@ -355,8 +355,8 @@ class BaseTrainer:
                 self._close_dataloader_mosaic()
                 self.train_loader.reset()
 
-            if epoch >= self.args.close_layer_wise_assign:
-                self.model.module.args.layer_wise_assign = False
+            if epoch >= self.args.close_layer_wise_assign * self.epochs:
+                self.model.args.layer_wise_assign = False
 
             if RANK in {-1, 0}:
                 LOGGER.info(self.progress_string())
@@ -755,8 +755,8 @@ class BaseTrainer:
         if start_epoch > (self.epochs - self.args.close_mosaic):
             self._close_dataloader_mosaic()
 
-        if start_epoch >= self.args.close_layer_wise_assign:
-            self.model.module.args.layer_wise_assign = False
+        if start_epoch >= self.args.close_layer_wise_assign * self.epochs:
+            self.model.args.layer_wise_assign = False
 
     def _close_dataloader_mosaic(self):
         """Update dataloaders to stop using mosaic augmentation."""
