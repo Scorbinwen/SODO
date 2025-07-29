@@ -134,5 +134,5 @@ head:
  - [75, 1, Conv, [256, 3, 1]]
  - [88, 1, Conv, [512, 3, 1]]
  - [101, 1, Conv, [1024, 3, 1]]
- - [[102, 103, 104], 1, Detect, [nc, False, True]] # Detect(P3, P4, P5)
+ - [[102, 103, 104], 1, Detect, [nc, False, False]] # Detect(P3, P4, P5)
 

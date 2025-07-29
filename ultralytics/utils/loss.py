@@ -275,7 +275,6 @@ class v8DetectionLoss:
 
         # apply layer-wise assigner:
         layer_wise_assign = self.model.args.layer_wise_assign and self.model.args.slim_obj_assign
-        print(f"layer_wise_assign:{layer_wise_assign}")
         if layer_wise_assign:
             smallest_res = pred_scores.shape[1] // (4*4 + 2*2 + 1*1)
             s1, s2, s3 = 16*smallest_res, 4*smallest_res, 1*smallest_res
