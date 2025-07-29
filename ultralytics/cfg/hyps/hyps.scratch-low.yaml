@@ -45,8 +45,10 @@ mask_ratio: 4 # (int) mask downsample ratio (segment train only)
 # Classification
 dropout: 0.0 # (float) use dropout regularization (classify train only)
 slim_obj_assign: True # (bool) slim object target assignment to significantly improve slim object detection accuracy.
+reg_max_sub_one: False
+use_center_offset: True
 layer_wise_assign: True # (bool) layer wise assignment to significantly fast deep network learning.
-close_layer_wise_assign: 1 # # (int) disable layer wise assignment for final epochs (0 to disable) dedicated for slim obj assignment.
+close_layer_wise_assign: 0.5 # # (int) disable layer wise assignment for final epochs (0 to disable) dedicated for slim obj assignment.
 
 # Val/Test settings ----------------------------------------------------------------------------------------------------
 val: True # (bool) validate/test during training

@@ -39,6 +39,11 @@ from ultralytics.utils.ops import Profile
 from ultralytics.utils.torch_utils import de_parallel, select_device, smart_inference_mode
 
 
+def check_nan_grad(model):
+    for name, param in model.named_parameters():
+        if param is not None and torch.isnan(param).any():
+            print(f"NaN gradient in {name}")
+
 class BaseValidator:
     """
     BaseValidator.

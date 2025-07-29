@@ -148,7 +148,6 @@ class TaskAlignedAssigner(nn.Module):
         pd_boxes = pd_bboxes.unsqueeze(1).expand(-1, self.n_max_boxes, -1, -1)[mask_gt]
         gt_boxes = gt_bboxes.unsqueeze(2).expand(-1, -1, na, -1)[mask_gt]
         overlaps[mask_gt] = self.iou_calculation(gt_boxes, pd_boxes)
-
         align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(self.beta)
 
         return align_metric, overlaps
@@ -384,11 +383,11 @@ def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
     return torch.cat((x1y1, x2y2), dim)  # xyxy bbox
 
 
-def bbox2dist(anchor_points, bbox, reg_max, slim_obj_assign=False):
+def bbox2dist(anchor_points, bbox, reg_max, reg_max_sub_one=False):
     """Transform bbox(xyxy) to dist(ltrb)."""
     x1y1, x2y2 = bbox.chunk(2, -1)
     dist = torch.cat((anchor_points - x1y1, x2y2 - anchor_points), -1)
-    if slim_obj_assign:
+    if reg_max_sub_one:
         dist = dist.clamp_(-1, reg_max - 2 - 0.01)
     else:
         dist = dist.clamp_(0, reg_max - 1 - 0.01)

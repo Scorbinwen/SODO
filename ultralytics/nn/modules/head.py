@@ -31,13 +31,18 @@ class Detect(nn.Module):
     strides = torch.empty(0)  # init
     legacy = False  # backward compatibility for v3/v5/v8/v9 models
 
-    def __init__(self, nc=80, slim_obj_assign=False, ch=()):
+    def __init__(self, nc=80, reg_max_sub_one=False, use_center_offset=False, ch=()):
         """Initializes the YOLO detection layer with specified number of classes and channels."""
         super().__init__()
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
         self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
-        self.no = nc + self.reg_max * 4  # number of outputs per anchor
+        self.use_center_offset = use_center_offset
+        if self.use_center_offset:
+            self.no = nc + self.reg_max * 4 + 2  # number of outputs per anchor
+        else:
+            self.no = nc + self.reg_max * 4  # number of outputs per anchor
+
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
         self.cv2 = nn.ModuleList(
@@ -55,7 +60,13 @@ class Detect(nn.Module):
                 for x in ch
             )
         )
-        self.dfl = DFL(self.reg_max, slim_obj_assign=slim_obj_assign) if self.reg_max > 1 else nn.Identity()
+
+        if self.use_center_offset:
+            self.cv5 = nn.ModuleList(
+                nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, 2, 1)) for x in ch
+            )
+
+        self.dfl = DFL(self.reg_max, reg_max_sub_one=reg_max_sub_one) if self.reg_max > 1 else nn.Identity()
 
         if self.end2end:
             self.one2one_cv2 = copy.deepcopy(self.cv2)
@@ -67,7 +78,10 @@ class Detect(nn.Module):
             return self.forward_end2end(x)
 
         for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+            if getattr(self, 'use_center_offset', False):
+                x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i]), self.cv5[i](x[i]).sigmoid() - 0.5), 1)
+            else:
+                x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
         if self.training:  # Training path
             return x
         y = self._inference(x)
@@ -109,9 +123,19 @@ class Detect(nn.Module):
         if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
             box = x_cat[:, : self.reg_max * 4]
             cls = x_cat[:, self.reg_max * 4 :]
+            if getattr(self, 'use_center_offset', False):
+                center_offset = x_cat[:, -2:]
         else:
-            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+            if getattr(self, 'use_center_offset', False):
+                box, cls, center_offset = x_cat.split((self.reg_max * 4, self.nc, 2), 1)
+            else:
+                box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
 
+        if getattr(self, 'use_center_offset', False):
+            print(f"self.anchors:{self.anchors.shape} center_offset:{center_offset.shape}")
+            anchors = self.anchors + center_offset
+        else:
+            anchors = self.anchors.unsqueeze(0)
         if self.export and self.format in {"tflite", "edgetpu"}:
             # Precompute normalization factor to increase numerical stability
             # See https://github.com/ultralytics/ultralytics/issues/7371
@@ -119,15 +143,14 @@ class Detect(nn.Module):
             grid_w = shape[3]
             grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
             norm = self.strides / (self.stride[0] * grid_size)
-            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
+            dbox = self.decode_bboxes(self.dfl(box) * norm, anchors * norm[:, :2])
         elif self.export and self.format == "imx":
             dbox = self.decode_bboxes(
-                self.dfl(box) * self.strides, self.anchors.unsqueeze(0) * self.strides, xywh=False
+                self.dfl(box) * self.strides, anchors * self.strides, xywh=False
             )
             return dbox.transpose(1, 2), cls.sigmoid().permute(0, 2, 1)
         else:
-            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-
+            dbox = self.decode_bboxes(self.dfl(box), anchors) * self.strides
         return torch.cat((dbox, cls.sigmoid()), 1)
 
     def bias_init(self):
@@ -175,9 +198,9 @@ class Detect(nn.Module):
 class Segment(Detect):
     """YOLO Segment head for segmentation models."""
 
-    def __init__(self, nc=80, nm=32, npr=256, combine_mask=False, slim_obj_assign=False, ch=()):
+    def __init__(self, nc=80, nm=32, npr=256, combine_mask=False, reg_max_sub_one=False, use_center_offset=False, ch=()):
         """Initialize the YOLO model attributes such as the number of masks, prototypes, and the convolution layers."""
-        super().__init__(nc, slim_obj_assign, ch)
+        super().__init__(nc, reg_max_sub_one, use_center_offset, ch)
         self.npr = npr  # number of protos
         self.combine_mask = combine_mask
         self.nc = nc

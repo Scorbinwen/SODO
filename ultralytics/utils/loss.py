@@ -65,11 +65,11 @@ class FocalLoss(nn.Module):
 class DFLoss(nn.Module):
     """Criterion class for computing DFL losses during training."""
 
-    def __init__(self, reg_max=16, slim_obj_assign=False) -> None:
+    def __init__(self, reg_max=16, reg_max_sub_one=False) -> None:
         """Initialize the DFL module."""
         super().__init__()
         self.reg_max = reg_max
-        self.slim_obj_assign = slim_obj_assign
+        self.reg_max_sub_one = reg_max_sub_one
 
     def __call__(self, pred_dist, target):
         """
@@ -78,7 +78,7 @@ class DFLoss(nn.Module):
         Distribution Focal Loss (DFL) proposed in Generalized Focal Loss
         https://ieeexplore.ieee.org/document/9792391
         """
-        if self.slim_obj_assign:
+        if self.reg_max_sub_one:
             target = target.clamp_(-1, self.reg_max - 2 - 0.01)
             target = target + 1
             # pred_dist = pred_dist + 1
@@ -98,11 +98,11 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses during training."""
 
-    def __init__(self, reg_max=16, slim_obj_assign=False):
+    def __init__(self, reg_max=16, reg_max_sub_one=False):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
-        self.dfl_loss = DFLoss(reg_max, slim_obj_assign=slim_obj_assign) if reg_max > 1 else None
-        self.slim_obj_assign = slim_obj_assign
+        self.dfl_loss = DFLoss(reg_max, reg_max_sub_one=reg_max_sub_one) if reg_max > 1 else None
+        self.reg_max_sub_one = reg_max_sub_one
 
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """IoU loss."""
@@ -111,18 +111,19 @@ class BboxLoss(nn.Module):
 
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
+
         # DFL loss
         if self.dfl_loss:
-            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max, slim_obj_assign=self.slim_obj_assign)
+            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max, reg_max_sub_one=self.reg_max_sub_one)
             loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
 
-        if loss_dfl.isnan().any():
-            print(f"self.slim_obj_assign:{self.slim_obj_assign}")
-            # print(f"pred_dist[fg_mask]:{pred_dist[fg_mask]} target_ltrb[fg_mask]:{target_ltrb[fg_mask]} loss_dfl:{loss_dfl}")
-            raise ValueError("loss_dfl is nan")
+        # if loss_dfl.isnan().any():
+        #     print(f"self.slim_obj_assign:{self.slim_obj_assign}")
+        #     # print(f"pred_dist[fg_mask]:{pred_dist[fg_mask]} target_ltrb[fg_mask]:{target_ltrb[fg_mask]} loss_dfl:{loss_dfl}")
+        #     raise ValueError("loss_dfl is nan")
         return loss_iou, loss_dfl
 
 
@@ -180,7 +181,12 @@ class v8DetectionLoss:
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
-        self.no = m.nc + m.reg_max * 4
+        self.use_center_offset = h.use_center_offset
+        if self.use_center_offset:
+            self.no = m.nc + m.reg_max * 4 + 2
+        else:
+            self.no = m.nc + m.reg_max * 4
+
         self.reg_max = m.reg_max
         self.device = device
 
@@ -188,8 +194,8 @@ class v8DetectionLoss:
 
         self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0,
                                             slim_obj_assign=self.hyp.slim_obj_assign)
-        self.bbox_loss = BboxLoss(m.reg_max, slim_obj_assign=self.hyp.slim_obj_assign).to(device)
-        if self.hyp.slim_obj_assign:
+        self.bbox_loss = BboxLoss(m.reg_max, reg_max_sub_one=self.hyp.reg_max_sub_one).to(device)
+        if self.hyp.reg_max_sub_one:
             self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device) - 1
         else:
             self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
@@ -230,12 +236,19 @@ class v8DetectionLoss:
             training = True
             feats = preds
 
-        pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
-            (self.reg_max * 4, self.nc), 1
-        )
+        if self.use_center_offset:
+            pred_distri, pred_scores, pred_center_offset = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
+                (self.reg_max * 4, self.nc, 2), 1
+            )
+        else:
+            pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
+                (self.reg_max * 4, self.nc), 1
+            )
 
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
         pred_distri = pred_distri.permute(0, 2, 1).contiguous()
+        if self.use_center_offset:
+            pred_center_offset = pred_center_offset.permute(0, 2, 1).contiguous()
 
         dtype = pred_scores.dtype
         batch_size = pred_scores.shape[0]
@@ -253,12 +266,16 @@ class v8DetectionLoss:
         mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
 
         # Pboxes
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
+        if self.use_center_offset:
+            pred_bboxes = self.bbox_decode(anchor_points + pred_center_offset, pred_distri)  # xyxy, (b, h*w, 4)
+        else:
+            pred_bboxes = self.bbox_decode(anchor_points, pred_distri)  # xyxy, (b, h*w, 4)
         # dfl_conf = pred_distri.view(batch_size, -1, 4, self.reg_max).detach().softmax(-1)
         # dfl_conf = (dfl_conf.amax(-1).mean(-1) + dfl_conf.amax(-1).amin(-1)) / 2
 
         # apply layer-wise assigner:
         layer_wise_assign = self.model.args.layer_wise_assign and self.model.args.slim_obj_assign
+        print(f"layer_wise_assign:{layer_wise_assign}")
         if layer_wise_assign:
             smallest_res = pred_scores.shape[1] // (4*4 + 2*2 + 1*1)
             s1, s2, s3 = 16*smallest_res, 4*smallest_res, 1*smallest_res
@@ -303,9 +320,9 @@ class v8DetectionLoss:
 
         debug_score = True
         if debug_score:
-            if not training:
+            if training:
                 import numpy as np
-                for ind in range(8):
+                for ind in range(min(8, target_scores.shape[0])):
                     save_score_heatmap(target_scores, ind=ind, target_bbox=gt_bboxes, batch=batch,
                                                     suffix="target", need_sigmoid=False, show_bbox=True)
                     save_score_heatmap(pred_scores, ind=ind, pred_bbox=(pred_bboxes * stride_tensor).type(gt_bboxes.dtype),
@@ -314,9 +331,14 @@ class v8DetectionLoss:
         # Bbox loss
         if fg_mask.sum():
             target_bboxes /= stride_tensor
-            loss[0], loss[2] = self.bbox_loss(
-                pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
-            )
+            if self.use_center_offset:
+                loss[0], loss[2] = self.bbox_loss(
+                    pred_distri, pred_bboxes, anchor_points + pred_center_offset, target_bboxes, target_scores, target_scores_sum, fg_mask
+                )
+            else:
+                loss[0], loss[2] = self.bbox_loss(
+                    pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
+                )
 
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain

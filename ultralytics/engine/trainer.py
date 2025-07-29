@@ -356,6 +356,7 @@ class BaseTrainer:
                 self.train_loader.reset()
 
             if epoch >= self.args.close_layer_wise_assign * self.epochs:
+                LOGGER.info("Closing layer-wise assign")
                 self.model.args.layer_wise_assign = False
 
             if RANK in {-1, 0}:
@@ -756,6 +757,7 @@ class BaseTrainer:
             self._close_dataloader_mosaic()
 
         if start_epoch >= self.args.close_layer_wise_assign * self.epochs:
+            LOGGER.info("Closing layer-wise assign")
             self.model.args.layer_wise_assign = False
 
     def _close_dataloader_mosaic(self):
