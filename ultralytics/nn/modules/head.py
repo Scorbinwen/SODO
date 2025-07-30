@@ -132,7 +132,6 @@ class Detect(nn.Module):
                 box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
 
         if getattr(self, 'use_center_offset', False):
-            print(f"self.anchors:{self.anchors.shape} center_offset:{center_offset.shape}")
             anchors = self.anchors + center_offset
         else:
             anchors = self.anchors.unsqueeze(0)

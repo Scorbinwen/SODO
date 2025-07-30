@@ -119,11 +119,6 @@ class BboxLoss(nn.Module):
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
-
-        # if loss_dfl.isnan().any():
-        #     print(f"self.slim_obj_assign:{self.slim_obj_assign}")
-        #     # print(f"pred_dist[fg_mask]:{pred_dist[fg_mask]} target_ltrb[fg_mask]:{target_ltrb[fg_mask]} loss_dfl:{loss_dfl}")
-        #     raise ValueError("loss_dfl is nan")
         return loss_iou, loss_dfl
 
 
@@ -317,7 +312,7 @@ class v8DetectionLoss:
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
         loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
 
-        debug_score = True
+        debug_score = False
         if debug_score:
             if training:
                 import numpy as np
