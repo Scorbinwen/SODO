@@ -270,6 +270,36 @@ class C3(nn.Module):
         """Forward pass through the CSP bottleneck with 2 convolutions."""
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
+    def forward_debug(self, x):
+        """Forward pass through the CSP bottleneck with 2 convolutions."""
+        tensor0 = self.cv1(x)
+        print(f"tensor0.min():{tensor0.min()} tensor0.max():{tensor0.max()}")
+        tensor1_0_conv = self.m[0].cv1.conv(tensor0)
+        print(f"self.m[0].cv1.conv.weight.shape:{self.m[0].cv1.conv.weight.shape} "
+              f"self.m[0].cv1.conv.min:{self.m[0].cv1.conv.weight.data.min()} "
+              f"self.m[0].cv1.conv.max:{self.m[0].cv1.conv.weight.data.max()}")
+
+        print(f"tensor1_0_conv.min():{tensor1_0_conv.min()} tensor1_0_conv.max():{tensor1_0_conv.max()}")
+
+        if getattr(self.m[0].cv1, 'bn', None):
+            tensor1_0_bn = self.m[0].cv1.bn(tensor1_0_conv)
+            # print(f"self.m[0].cv1.bn.weight:{self.m[0].cv1.bn.weight} "
+            #       f"self.m[0].cv1.bn.bias:{self.m[0].cv1.bn.bias} ")
+            print(f"self.m[0].cv1.bn.running_mean:{self.m[0].cv1.bn.running_mean} "
+                  f"self.m[0].cv1.bn.running_var:{self.m[0].cv1.bn.running_var}")
+            print(f"tensor1_0_bn.min():{tensor1_0_bn.min()} tensor1_0_bn.max():{tensor1_0_bn.max()}")
+        else:
+            tensor1_0_bn = tensor1_0_conv
+
+        tensor1_0_act = self.m[0].cv1.act(tensor1_0_bn)
+        print(f"tensor1_0_act.min():{tensor1_0_act.min()} tensor1_0_act.max():{tensor1_0_act.max()}")
+
+        tensor1_0_1 = self.m[0].cv2(tensor1_0_act)
+        print(f"tensor1_0_1.min():{tensor1_0_1.min()} tensor1_0_1.max():{tensor1_0_1.max()}")
+        tensor1_1 = self.m[1](tensor1_0_1 + tensor0)
+        tensor2 = self.cv2(x)
+
+        return self.cv3(torch.cat((tensor1_1, tensor2), 1))
 
 class C3x(C3):
     """C3 module with cross-convolutions."""
