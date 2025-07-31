@@ -52,7 +52,7 @@ from ultralytics.utils.torch_utils import (
     select_device,
     strip_optimizer,
     torch_distributed_zero_first,
-    unset_deterministic,
+    unset_deterministic, de_parallel,
 )
 
 
@@ -357,7 +357,7 @@ class BaseTrainer:
 
             if epoch >= self.args.close_layer_wise_assign * self.epochs:
                 LOGGER.info("Closing layer-wise assign")
-                self.model.args.layer_wise_assign = False
+                de_parallel(self.model).args.layer_wise_assign = False
 
             if RANK in {-1, 0}:
                 LOGGER.info(self.progress_string())
@@ -758,7 +758,7 @@ class BaseTrainer:
 
         if start_epoch >= self.args.close_layer_wise_assign * self.epochs:
             LOGGER.info("Closing layer-wise assign")
-            self.model.args.layer_wise_assign = False
+            de_parallel(self.model).args.layer_wise_assign = False
 
     def _close_dataloader_mosaic(self):
         """Update dataloaders to stop using mosaic augmentation."""
