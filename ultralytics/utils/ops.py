@@ -928,8 +928,6 @@ def parse_opt():
     base_parser = argparse.ArgumentParser()
     base_parser.add_argument('--model', default="../ultralytics/cfg/models/11/yolo11l-seg.yaml", help='模型配置文件路径')
     base_parser.add_argument('--cfg', default="../ultralytics/cfg/hyps/hyps.scratch-low.yaml", help='超参数配置文件路径')
-    base_parser.add_argument('--imgsz', nargs='+', type=int, default=[320, 320],
-                        help='输入图像尺寸列表，例如: --imgsz 704 1024')
     base_args, unknown = base_parser.parse_known_args()
 
     # 加载YAML配置

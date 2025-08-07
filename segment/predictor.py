@@ -20,12 +20,13 @@ if __name__ == "__main__":
     # 合并配置参数
     with open(args.cfg) as f:
         cfg_params = yaml.safe_load(f).get('predict', {})
-    cfg_params.update({k: v for k, v in vars(args).items() if k not in ['model', 'cfg']})
+    command_overrides = {k: v for k, v in vars(args).items()
+                         if k in cfg_params.keys() and v != cfg_params.get(k)}
 
     # 初始化模型
     model = YOLO(args.model)
 
     # 执行预测
     results = model.predict(
-        **cfg_params,
+        **command_overrides,
     )

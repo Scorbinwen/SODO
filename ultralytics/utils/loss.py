@@ -314,7 +314,7 @@ class v8DetectionLoss:
 
         debug_score = False
         if debug_score:
-            if training:
+            if not training:
                 import numpy as np
                 for ind in range(min(8, target_scores.shape[0])):
                     save_score_heatmap(target_scores, ind=ind, target_bbox=gt_bboxes, batch=batch,

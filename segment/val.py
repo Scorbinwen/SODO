@@ -26,9 +26,9 @@ if __name__ == "__main__":
     # 合并命令行覆盖值
     command_overrides = {k: v for k, v in vars(args).items()
                          if k in cfg_params.keys() and v != cfg_params.get(k)}
-    cfg_params.update(command_overrides)
 
     # 加载模型
+
     model = YOLO(args.model)
     # 执行验证
-    model.val(**cfg_params)
+    model.val(**command_overrides)
