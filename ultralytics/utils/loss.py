@@ -315,12 +315,13 @@ class v8DetectionLoss:
         debug_score = False
         if debug_score:
             if not training:
-                import numpy as np
+                import os
+                save_dir = os.path.join(self.hyp.save_dir, "pred_scores")
                 for ind in range(min(8, target_scores.shape[0])):
                     save_score_heatmap(target_scores, ind=ind, target_bbox=gt_bboxes, batch=batch,
-                                                    suffix="target", need_sigmoid=False, show_bbox=True)
+                                                    suffix="target", need_sigmoid=False, show_bbox=True, save_dir=save_dir)
                     save_score_heatmap(pred_scores, ind=ind, pred_bbox=(pred_bboxes * stride_tensor).type(gt_bboxes.dtype),
-                                            batch=batch, suffix="pred", need_sigmoid=True, show_bbox=True)
+                                            batch=batch, suffix="pred", need_sigmoid=True, show_bbox=True, save_dir=save_dir)
 
         # Bbox loss
         if fg_mask.sum():

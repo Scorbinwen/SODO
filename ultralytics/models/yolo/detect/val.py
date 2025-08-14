@@ -12,7 +12,7 @@ from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou
 from ultralytics.utils.plotting import output_to_target, plot_images
-
+from PIL import Image
 
 class DetectionValidator(BaseValidator):
     """
@@ -340,3 +340,91 @@ class DetectionValidator(BaseValidator):
             except Exception as e:
                 LOGGER.warning(f"{pkg} unable to run: {e}")
         return stats
+
+    def save_predictions(self, batch, preds, ckpt_idx=None, save_dir="../runs/all_models_results"):
+        """
+        Saves validation predictions as images and masks.
+        Args:
+            batch (dict): A dictionary containing the input batch data.
+            preds (list): A list of prediction tensors.
+            ckpt_idx (int | None): The checkpoint index.
+            subdir (str): The subdirectory where the results will be saved.
+        Returns:
+            None
+        """
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        batch_img = batch["img"]
+        img_files = batch["im_file"]
+        batch_idx = batch["batch_idx"]
+        batch_cls = batch["cls"]
+        batch_bboxes = batch["bboxes"]
+        for idx in range(len(batch_img)):
+            im_index = batch_idx == idx
+            bidx = batch_idx[im_index]
+            cls = batch_cls[im_index].squeeze(-1)
+            bboxes = batch_bboxes[im_index]
+
+
+            img = batch_img[idx]
+            im_file = img_files[idx]
+
+            file_name_without_ext = Path(im_file).stem
+
+            # save origin image
+            ori_img_path = os.path.join(save_dir, f'{file_name_without_ext}.jpg')
+            if not os.path.exists(ori_img_path):
+                img_np = (img.permute(1, 2, 0) * 255).byte().cpu().numpy()  # Scale to 0-255 and convert to uint8
+                image = Image.fromarray(img_np[..., :3])
+                image.save(ori_img_path)
+
+
+            # save label
+            fname = Path(save_dir) / f"{file_name_without_ext}_label.jpg"
+
+            batch_idx_zeros = torch.zeros_like(bidx)
+
+
+            plot_images(
+                img.unsqueeze(0),
+                batch_idx_zeros,
+                cls,
+                bboxes,
+                paths=[""],
+                fname=fname,
+                names=self.names,
+                on_plot=self.on_plot,
+            )  # pred
+
+        batch_idx_batch, cls_batch, bboxes_batch, confs = output_to_target(preds)
+
+
+        batch_img = batch["img"]
+        img_files = batch["im_file"]
+        for idx in range(len(img_files)):
+            im_index = batch_idx_batch == idx
+            batch_idx = batch_idx_batch[im_index]
+            batch_idx_zeros = np.zeros_like(batch_idx)
+
+            cls = cls_batch[im_index]
+            bboxes = bboxes_batch[im_index]
+            conf = confs[im_index]
+
+            im_file = img_files[idx]
+            file_name_without_ext = Path(im_file).stem
+            if ckpt_idx is not None:
+                fname = Path(save_dir) / f"{file_name_without_ext}_{ckpt_idx}_pred.jpg"
+            else:
+                fname = Path(save_dir) / f"{file_name_without_ext}_pred.jpg"
+            # save prediction
+            plot_images(
+                batch_img[idx].unsqueeze(0),
+                batch_idx_zeros,
+                cls,
+                bboxes,
+                conf,
+                paths=[""],
+                fname=fname,
+                names=self.names,
+                on_plot=self.on_plot,
+            )  # pred

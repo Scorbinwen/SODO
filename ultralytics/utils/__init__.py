@@ -298,6 +298,16 @@ class IterableSimpleNamespace(SimpleNamespace):
         """Return the value of the specified key if it exists; otherwise, return the default value."""
         return getattr(self, key, default)
 
+def get_ckpt_idx(weights: str):
+    w = str(weights[0] if isinstance(weights, list) else weights)
+    # get ckpt index from weights
+    ckpt_idx = None
+    file_name = Path(w).stem
+    # 使用正则表达式匹配字符串中最后一组连续的数字
+    match = re.search(r'\d+$', file_name)
+    if match:
+        ckpt_idx = int(match.group())
+    return ckpt_idx
 
 def plt_settings(rcparams=None, backend="Agg"):
     """
