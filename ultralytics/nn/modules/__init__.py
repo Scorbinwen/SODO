@@ -60,6 +60,10 @@ from .block import (
     TorchVision,
     SPPCSPC,
     MP,
+    HyperACE,
+    DownsampleConv,
+    FullPAD_Tunnel,
+    DSC3k2,
 )
 from .conv import (
     CBAM,
@@ -67,6 +71,7 @@ from .conv import (
     Concat,
     Conv,
     Conv2,
+    DSConv,
     ConvTranspose,
     DWConv,
     DWConvTranspose2d,
@@ -166,4 +171,9 @@ __all__ = (
     "A2C2f",
     "SPPCSPC",
     "MP",
+    "HyperACE",
+    "DownsampleConv",
+    "FullPAD_Tunnel",
+    "DSC3k2",
+    "DSConv"
 )

@@ -1,0 +1,14 @@
+path: /workspace/data/tans # dataset root dir
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['- - - - - - v2 2025-04-25 7-31pm']
+
+roboflow:
+  workspace: 2crack500
+  project: long-tans
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/2crack500/long-tans/dataset/1

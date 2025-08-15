@@ -1,0 +1,14 @@
+path: /workspace/data/pole_detection # dataset root dir
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['pole-hydro']
+
+roboflow:
+  workspace: poleproject
+  project: pole-detection-v2-bvqug
+  version: 14
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/poleproject/pole-detection-v2-bvqug/dataset/14
