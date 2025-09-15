@@ -249,7 +249,8 @@ class C2f(nn.Module):
         """Forward pass through C2f layer."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+        output = self.cv2(torch.cat(y, 1))
+        return output
 
     def forward_split(self, x):
         """Forward pass using split() instead of chunk()."""
@@ -274,37 +275,6 @@ class C3(nn.Module):
     def forward(self, x):
         """Forward pass through the CSP bottleneck with 2 convolutions."""
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
-
-    def forward_debug(self, x):
-        """Forward pass through the CSP bottleneck with 2 convolutions."""
-        tensor0 = self.cv1(x)
-        print(f"tensor0.min():{tensor0.min()} tensor0.max():{tensor0.max()}")
-        tensor1_0_conv = self.m[0].cv1.conv(tensor0)
-        print(f"self.m[0].cv1.conv.weight.shape:{self.m[0].cv1.conv.weight.shape} "
-              f"self.m[0].cv1.conv.min:{self.m[0].cv1.conv.weight.data.min()} "
-              f"self.m[0].cv1.conv.max:{self.m[0].cv1.conv.weight.data.max()}")
-
-        print(f"tensor1_0_conv.min():{tensor1_0_conv.min()} tensor1_0_conv.max():{tensor1_0_conv.max()}")
-
-        if getattr(self.m[0].cv1, 'bn', None):
-            tensor1_0_bn = self.m[0].cv1.bn(tensor1_0_conv)
-            # print(f"self.m[0].cv1.bn.weight:{self.m[0].cv1.bn.weight} "
-            #       f"self.m[0].cv1.bn.bias:{self.m[0].cv1.bn.bias} ")
-            print(f"self.m[0].cv1.bn.running_mean:{self.m[0].cv1.bn.running_mean} "
-                  f"self.m[0].cv1.bn.running_var:{self.m[0].cv1.bn.running_var}")
-            print(f"tensor1_0_bn.min():{tensor1_0_bn.min()} tensor1_0_bn.max():{tensor1_0_bn.max()}")
-        else:
-            tensor1_0_bn = tensor1_0_conv
-
-        tensor1_0_act = self.m[0].cv1.act(tensor1_0_bn)
-        print(f"tensor1_0_act.min():{tensor1_0_act.min()} tensor1_0_act.max():{tensor1_0_act.max()}")
-
-        tensor1_0_1 = self.m[0].cv2(tensor1_0_act)
-        print(f"tensor1_0_1.min():{tensor1_0_1.min()} tensor1_0_1.max():{tensor1_0_1.max()}")
-        tensor1_1 = self.m[1](tensor1_0_1 + tensor0)
-        tensor2 = self.cv2(x)
-
-        return self.cv3(torch.cat((tensor1_1, tensor2), 1))
 
 class C3x(C3):
     """C3 module with cross-convolutions."""
@@ -1227,42 +1197,49 @@ class TorchVision(nn.Module):
             y = self.m(x)
         return y
 
+import logging
+logger = logging.getLogger(__name__)
+
+USE_FLASH_ATTN = False
+try:
+    import torch
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:  # Ampere or newer
+        from flash_attn.flash_attn_interface import flash_attn_func
+        USE_FLASH_ATTN = True
+    else:
+        from torch.nn.functional import scaled_dot_product_attention as sdpa
+        logger.warning("FlashAttention is not available on this device. Using scaled_dot_product_attention instead.")
+except Exception:
+    from torch.nn.functional import scaled_dot_product_attention as sdpa
+    logger.warning("FlashAttention is not available on this device. Using scaled_dot_product_attention instead.")
 
 class AAttn(nn.Module):
     """
-    Area-attention module for YOLO models, providing efficient attention mechanisms.
-
-    This module implements an area-based attention mechanism that processes input features in a spatially-aware manner,
-    making it particularly effective for object detection tasks.
+    Area-attention module with the requirement of flash attention.
 
     Attributes:
-        area (int): Number of areas the feature map is divided.
-        num_heads (int): Number of heads into which the attention mechanism is divided.
-        head_dim (int): Dimension of each attention head.
-        qkv (Conv): Convolution layer for computing query, key and value tensors.
-        proj (Conv): Projection convolution layer.
-        pe (Conv): Position encoding convolution layer.
+        dim (int): Number of hidden channels;
+        num_heads (int): Number of heads into which the attention mechanism is divided;
+        area (int, optional): Number of areas the feature map is divided. Defaults to 1.
 
     Methods:
-        forward: Applies area-attention to input tensor.
+        forward: Performs a forward process of input tensor and outputs a tensor after the execution of the area attention mechanism.
 
     Examples:
-        >>> attn = AAttn(dim=256, num_heads=8, area=4)
-        >>> x = torch.randn(1, 256, 32, 32)
-        >>> output = attn(x)
+        >>> import torch
+        >>> from ultralytics.nn.modules import AAttn
+        >>> model = AAttn(dim=64, num_heads=2, area=4)
+        >>> x = torch.randn(2, 64, 128, 128)
+        >>> output = model(x)
         >>> print(output.shape)
-        torch.Size([1, 256, 32, 32])
+
+    Notes:
+        recommend that dim//num_heads be a multiple of 32 or 64.
+
     """
 
     def __init__(self, dim, num_heads, area=1):
-        """
-        Initializes an Area-attention module for YOLO models.
-
-        Args:
-            dim (int): Number of hidden channels.
-            num_heads (int): Number of heads into which the attention mechanism is divided.
-            area (int): Number of areas the feature map is divided, default is 1.
-        """
+        """Initializes the area-attention module, a simple yet efficient attention module for YOLO."""
         super().__init__()
         self.area = area
 
@@ -1270,40 +1247,57 @@ class AAttn(nn.Module):
         self.head_dim = head_dim = dim // num_heads
         all_head_dim = head_dim * self.num_heads
 
-        self.qkv = Conv(dim, all_head_dim * 3, 1, act=False)
+        self.qk = Conv(dim, all_head_dim * 2, 1, act=False)
+        self.v = Conv(dim, all_head_dim, 1, act=False)
         self.proj = Conv(all_head_dim, dim, 1, act=False)
-        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
+
+        self.pe = Conv(all_head_dim, dim, 5, 1, 2, g=dim, act=False)
 
     def forward(self, x):
-        """Processes the input tensor 'x' through the area-attention."""
+        """Processes the input tensor 'x' through the area-attention"""
         B, C, H, W = x.shape
         N = H * W
 
-        qkv = self.qkv(x).flatten(2).transpose(1, 2)
+        qk = self.qk(x).flatten(2).transpose(1, 2)
+        v = self.v(x)
+        pp = self.pe(v)
+        v = v.flatten(2).transpose(1, 2)
+
         if self.area > 1:
-            qkv = qkv.reshape(B * self.area, N // self.area, C * 3)
-            B, N, _ = qkv.shape
-        q, k, v = (
-            qkv.view(B, N, self.num_heads, self.head_dim * 3)
-            .permute(0, 2, 3, 1)
-            .split([self.head_dim, self.head_dim, self.head_dim], dim=2)
-        )
-        attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
-        attn = attn.softmax(dim=-1)
-        x = v @ attn.transpose(-2, -1)
-        x = x.permute(0, 3, 1, 2)
-        v = v.permute(0, 3, 1, 2)
+            qk = qk.reshape(B * self.area, N // self.area, C * 2)
+            v = v.reshape(B * self.area, N // self.area, C)
+            B, N, _ = qk.shape
+        q, k = qk.split([C, C], dim=2)
+
+        if x.is_cuda and USE_FLASH_ATTN:
+            q = q.view(B, N, self.num_heads, self.head_dim)
+            k = k.view(B, N, self.num_heads, self.head_dim)
+            v = v.view(B, N, self.num_heads, self.head_dim)
+
+            x = flash_attn_func(
+                q.contiguous().half(),
+                k.contiguous().half(),
+                v.contiguous().half()
+            ).to(q.dtype)
+        else:
+            q = q.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
+            k = k.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
+            v = v.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
+
+            attn = (q.transpose(-2, -1) @ k) * (self.head_dim ** -0.5)
+            max_attn = attn.max(dim=-1, keepdim=True).values
+            exp_attn = torch.exp(attn - max_attn)
+            attn = exp_attn / exp_attn.sum(dim=-1, keepdim=True)
+            x = (v @ attn.transpose(-2, -1))
+
+            x = x.permute(0, 3, 1, 2)
 
         if self.area > 1:
             x = x.reshape(B // self.area, N * self.area, C)
-            v = v.reshape(B // self.area, N * self.area, C)
             B, N, _ = x.shape
-
         x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
-        v = v.reshape(B, H, W, C).permute(0, 3, 1, 2)
 
-        x = x + self.pe(v)
-        return self.proj(x)
+        return self.proj(x + pp)
 
 
 class ABlock(nn.Module):

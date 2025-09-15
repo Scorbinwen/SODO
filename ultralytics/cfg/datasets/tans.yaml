@@ -1,10 +1,10 @@
 path: /workspace/data/tans # dataset root dir
 train: ../train/images
 val: ../valid/images
-test: ../test/images
+test: ../valid/images
 
 nc: 1
-names: ['- - - - - - v2 2025-04-25 7-31pm']
+names: ['tan']
 
 roboflow:
   workspace: 2crack500

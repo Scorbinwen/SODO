@@ -341,7 +341,7 @@ class DetectionValidator(BaseValidator):
                 LOGGER.warning(f"{pkg} unable to run: {e}")
         return stats
 
-    def save_predictions(self, batch, preds, ckpt_idx=None, save_dir="../runs/all_models_results"):
+    def save_predictions(self, batch, preds, ckpt_idx=None):
         """
         Saves validation predictions as images and masks.
         Args:
@@ -352,6 +352,7 @@ class DetectionValidator(BaseValidator):
         Returns:
             None
         """
+        save_dir = os.path.join(self.save_dir, "all_models_results")
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
         batch_img = batch["img"]

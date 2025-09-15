@@ -1,7 +1,7 @@
 path: /workspace/data/pole_detection # dataset root dir
 train: ../train/images
 val: ../valid/images
-test: ../test/images
+test: ../valid/images
 
 nc: 1
 names: ['pole-hydro']

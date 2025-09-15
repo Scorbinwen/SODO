@@ -1,7 +1,7 @@
 path: /workspace/data/combobox # dataset root dir
 train: ../train/images
 val: ../valid/images
-test: ../test/images
+test: ../valid/images
 
 nc: 2
 names: ['Datepicker', 'combobox']
