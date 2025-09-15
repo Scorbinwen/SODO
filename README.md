@@ -60,7 +60,7 @@ Official implementation of SODO for Object Detection, accompanying our paper *[S
 
 1. Run prediction:
    ```bash
-   cd segment
+   cd script
    # Edit predict.sh with your parameters
    sh predict.sh
    ```
