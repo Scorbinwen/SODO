@@ -112,12 +112,7 @@ Official implementation of SODO for Object Detection, accompanying our paper *[S
 
 ## 📜 Citation
 ```bibtex
-@article{wu2025yolocm,
-  title={Slim Object Direct Offset (SODO): Why YOLO with TOOD struggles to detect slim objects? A new matching approach for slim objects},
-  author={Renzhong Wu and Xiaobin Wen and Shenghui Liao and Jianfeng Li and Xiaoyan Kui},
-  journal={Springer International Publishing},
-  year={2025}
-}
+@article{Anonomized Now}
 ```
 
 ## 🤝 Acknowledgements
