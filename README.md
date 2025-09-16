@@ -88,7 +88,7 @@ Official implementation of SODO for Object Detection, accompanying our paper *[S
 | v12-L               | 0.708          | 0.538             | 0.724          | 0.559             | 0.813                     | 0.566                        | 0.705           | 0.489              |
 | v12-L (SODO) **Ours** | **0.711**      | 0.537             | **0.731**      | 0.558             | **0.832**                 | **0.578**                    | **0.729**       | **0.499**          |
 | v13-L               | 0.709          | 0.581             | 0.740          | 0.577             | 0.816                     | 0.568                        | 0.738           | 0.531              |
-| v13-L (SODO) **Ours** | **0.712**      | 0.580             | **0.746**      | 0.577             | **0.825**                 | **0.574**                    | **0.742**       | 0.501              |
+| v13-L (SODO) **Ours** | **0.712**      | 0.580             | **0.746**      | 0.577             | **0.825**                 | **0.574**                    | **0.742**       |  **0.532**             |
 
 *Table 1: Comparative evaluation on COCO test2017 & pole_detection & tans dataset. All metrics reported at IoU threshold 0.50:0.95.*
 
